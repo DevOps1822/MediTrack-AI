@@ -547,7 +547,18 @@ class _SplashScreenState extends State<SplashScreen>
     Future.delayed(const Duration(milliseconds: 1600), () {
       if (!mounted) return;
       () async {
-        await appState.loadSharedData();
+        try {
+          await appState.loadSharedData().timeout(
+            const Duration(seconds: 8),
+            onTimeout: () {
+              // Firebase or network is too slow — fall through with local data
+              appState.load();
+            },
+          );
+        } catch (_) {
+          // Any unexpected error — fall through with whatever local data exists
+          appState.load();
+        }
         if (!mounted) return;
         if (!StorageService.instance.onboardingCompleted) {
           go(context, const OnboardingScreen(), clear: true);
@@ -1464,6 +1475,9 @@ class PatientDashboard extends StatelessWidget {
             .toList()
           ..sort((a, b) => a.date.compareTo(b.date));
     final upcoming = upcomingAppointments.firstOrNull;
+    final linkedPatient = appState.patients
+        .where((p) => p.linkedPatientUserId == appState.user!.id)
+        .firstOrNull;
     return SafeArea(
       child: ListView(
         padding: const EdgeInsets.all(20),
@@ -1499,6 +1513,47 @@ class PatientDashboard extends StatelessWidget {
               ],
             ),
           ),
+          if (linkedPatient?.followUpSuggestion != null) ...[
+            const SizedBox(height: 16),
+            AppCard(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(
+                    Icons.event_repeat_rounded,
+                    color: AppColors.accent,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Follow-Up Reminder',
+                          style: TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Your doctor suggests a follow-up ${linkedPatient!.followUpSuggestion!.suggestedPeriod}.',
+                          style: const TextStyle(color: AppColors.muted),
+                        ),
+                        if (linkedPatient.followUpDate != null) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            'Suggested date: ${fmt(linkedPatient.followUpDate)}',
+                            style: const TextStyle(
+                              color: AppColors.accent,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           const Text(
             'Appointment Status',
@@ -2710,6 +2765,21 @@ class _AiResultScreenState extends State<AiResultScreen> {
         body: 'Follow-up reminder is due today.',
         date: reminderDate,
       );
+      // Notify the linked patient in-app
+      if (widget.patient.linkedPatientUserId != null) {
+        await appState.addNotification(
+          NotificationItem(
+            id: id(),
+            userRole: 'Patient',
+            userId: widget.patient.linkedPatientUserId!,
+            title: 'Follow-up reminder scheduled',
+            message:
+                'Your doctor has suggested a follow-up ${r.suggestedPeriod}. '
+                'Suggested date: ${fmt(widget.patient.followUpDate)}.',
+            type: 'followup',
+          ),
+        );
+      }
     }
     await appState.savePatient(widget.patient);
     await appState.persist();
